@@ -42,6 +42,7 @@ STATS2_CONFIG_RE = re.compile(
 # Matches the season out of the page <title>, e.g. "Ligue 2 2026/2027 table, ..."
 TITLE_SEASON_RE = re.compile(r"<title>.*?(\d{4}/\d{4}).*?</title>", re.IGNORECASE | re.DOTALL)
 
+TABLE_SELECTOR = ".ui-table"
 ROW_SELECTOR = ".ui-table__body .ui-table__row"
 CONSENT_BUTTON_SELECTOR = "#onetrust-accept-btn-handler"
 
@@ -99,9 +100,15 @@ async def _dismiss_consent_overlay(page: Page) -> None:
 async def _extract_rows(page: Page) -> list[dict[str, Any]]:
     """Extract standings rows from the already-rendered page via a single JS pass."""
     return await page.eval_on_selector_all(
-        ROW_SELECTOR,
+        TABLE_SELECTOR,
         """
-        (rows) => rows.map((row) => {
+        (tables) => tables.flatMap((table) => {
+          // Leagues split into groups render one table per group; the group name
+          // ("Group A") is the title of the participant header cell. Single-table
+          // leagues use a generic header, which we treat as "no group".
+          const headerTitle = (table.querySelector('.table__headerCell--participant') || {}).title || '';
+          const group = /group|groupe|zone|pool/i.test(headerTitle) ? headerTitle.trim() : null;
+          return Array.from(table.querySelectorAll('.ui-table__body .ui-table__row')).map((row) => {
             const rankEl = row.querySelector('.tableCellRank');
             const nameEl = row.querySelector('.tableCellParticipant__name');
             const imgEl = row.querySelector('.tableCellParticipant__image img');
@@ -132,6 +139,7 @@ async def _extract_rows(page: Page) -> list[dict[str, Any]]:
             }
 
             return {
+                group: group,
                 position_raw: rankEl ? rankEl.textContent.trim() : null,
                 zone_title: rankEl ? rankEl.getAttribute('title') : null,
                 team_name: nameEl ? nameEl.textContent.trim() : null,
@@ -147,6 +155,7 @@ async def _extract_rows(page: Page) -> list[dict[str, Any]]:
                 points: valueEls[6] ? valueEls[6].textContent.trim() : null,
                 form: formIcons,
             };
+          });
         })
         """,
     )
@@ -170,6 +179,7 @@ def _clean_row(raw: dict[str, Any]) -> dict[str, Any]:
             team_id = parts[-1]
 
     return {
+        "group": raw.get("group"),
         "position": _to_int(raw.get("position_raw")),
         "zone": raw.get("zone_title"),
         "team_name": raw.get("team_name"),

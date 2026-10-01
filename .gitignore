@@ -2,3 +2,6 @@ __pycache__/
 *.pyc
 soccerway.db
 .venv/
+.env
+.pytest_cache/
+*.log

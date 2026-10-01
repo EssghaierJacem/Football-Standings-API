@@ -71,6 +71,9 @@ def init_db(db_path: Path | str = config.DB_PATH) -> None:
             )
             """
         )
+        columns = {r["name"] for r in conn.execute("PRAGMA table_info(standings)")}
+        if "group_name" not in columns:
+            conn.execute("ALTER TABLE standings ADD COLUMN group_name TEXT")
         # Seed tracked_leagues from config, without clobbering existing rows
         # (e.g. leagues added at runtime via POST /leagues) or their added_at.
         for country, league in config.TRACKED_LEAGUES:
@@ -124,18 +127,19 @@ def upsert_standings(result: dict[str, Any], db_path: Path | str = config.DB_PAT
                 """
                 INSERT INTO standings (
                     country, league, season, team_key, team_id, team_name,
-                    position, zone, team_logo_url, played, won, drawn, lost,
+                    group_name, position, zone, team_logo_url, played, won, drawn, lost,
                     goals_for, goals_against, goal_difference, points,
                     form_json, raw_json, stage_id, scraped_at
                 ) VALUES (
                     :country, :league, :season, :team_key, :team_id, :team_name,
-                    :position, :zone, :team_logo_url, :played, :won, :drawn, :lost,
+                    :group_name, :position, :zone, :team_logo_url, :played, :won, :drawn, :lost,
                     :goals_for, :goals_against, :goal_difference, :points,
                     :form_json, :raw_json, :stage_id, :scraped_at
                 )
                 ON CONFLICT (country, league, season, team_key) DO UPDATE SET
                     team_id = excluded.team_id,
                     team_name = excluded.team_name,
+                    group_name = excluded.group_name,
                     position = excluded.position,
                     zone = excluded.zone,
                     team_logo_url = excluded.team_logo_url,
@@ -159,6 +163,7 @@ def upsert_standings(result: dict[str, Any], db_path: Path | str = config.DB_PAT
                     "team_key": team_key,
                     "team_id": row.get("team_id"),
                     "team_name": row["team_name"],
+                    "group_name": row.get("group"),
                     "position": row.get("position"),
                     "zone": row.get("zone"),
                     "team_logo_url": row.get("team_logo_url"),
@@ -176,12 +181,19 @@ def upsert_standings(result: dict[str, Any], db_path: Path | str = config.DB_PAT
                     "scraped_at": meta["scraped_at"],
                 },
             )
+        # Drop teams that were not in this scrape (left the league / group renamed)
+        # so a season's table always mirrors the latest source data.
+        conn.execute(
+            "DELETE FROM standings WHERE country = ? AND league = ? AND season = ? AND scraped_at <> ?",
+            (meta["country"], meta["league"], season, meta["scraped_at"]),
+        )
     return len(standings)
 
 
 def _row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
     d = dict(row)
     d["form"] = json.loads(d.pop("form_json") or "[]")
+    d["group"] = d.pop("group_name", None)
     d.pop("raw_json", None)
     return d
 
@@ -203,7 +215,7 @@ def get_standings(
                 """
                 SELECT season FROM standings
                 WHERE country = ? AND league = ?
-                ORDER BY scraped_at DESC LIMIT 1
+                ORDER BY season DESC, scraped_at DESC LIMIT 1
                 """,
                 (country, league),
             ).fetchone()
@@ -215,7 +227,7 @@ def get_standings(
             """
             SELECT * FROM standings
             WHERE country = ? AND league = ? AND season = ?
-            ORDER BY position ASC
+            ORDER BY COALESCE(group_name, '') ASC, position ASC, points DESC, team_name ASC
             """,
             (country, league, season),
         ).fetchall()
@@ -244,7 +256,7 @@ def get_team(
                 """
                 SELECT season FROM standings
                 WHERE country = ? AND league = ?
-                ORDER BY scraped_at DESC LIMIT 1
+                ORDER BY season DESC, scraped_at DESC LIMIT 1
                 """,
                 (country, league),
             ).fetchone()

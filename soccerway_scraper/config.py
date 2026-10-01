@@ -43,4 +43,6 @@ SCRAPE_INTERVAL_MINUTES = int(os.environ.get("SCRAPE_INTERVAL_MINUTES", "45"))
 # shared rate limiter across workers, not a per-worker sleep.
 MIN_REQUEST_DELAY_SECONDS = int(os.environ.get("MIN_REQUEST_DELAY_SECONDS", "5"))
 
+AUTO_SCRAPE = os.environ.get("AUTO_SCRAPE", "1") != "0"
+
 DB_PATH = Path(os.environ.get("SOCCERWAY_DB_PATH", str(Path(__file__).resolve().parent.parent / "soccerway.db")))
