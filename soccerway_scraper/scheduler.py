@@ -13,7 +13,8 @@ import sys
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-from . import config, storage
+from . import config, fixtures_storage, storage
+from .fixtures import scrape_team_fixtures
 from .scraper import ScrapeError, scrape_standings
 
 logger = logging.getLogger(__name__)
@@ -54,15 +55,33 @@ async def scrape_one(country: str, league: str) -> bool:
         return False
 
 
+async def scrape_team_one(team_slug: str, team_id: str) -> bool:
+    """Scrape and store one team's fixtures. Returns True on success."""
+    try:
+        result = await asyncio.to_thread(_run_in_own_loop, lambda: scrape_team_fixtures(team_slug, team_id))
+        fixtures_storage.upsert_fixtures(result)
+        logger.info("Scraped fixtures for %s/%s: %d matches", team_slug, team_id, len(result["fixtures"]))
+        return True
+    except ScrapeError as exc:
+        logger.error("Fixtures scrape FAILED for %s/%s, skipping this run: %s", team_slug, team_id, exc)
+        return False
+    except Exception:  # noqa: BLE001 - never let one team's crash kill the loop
+        logger.exception("Unexpected error scraping fixtures for %s/%s, skipping this run", team_slug, team_id)
+        return False
+
+
 async def run_all_tracked() -> None:
     leagues = storage.list_tracked_leagues()
     if not leagues:
         logger.warning("No tracked leagues configured; nothing to scrape")
-        return
 
     for entry in leagues:
         await scrape_one(entry["country"], entry["league"])
         # Respectful pacing: never fire requests back-to-back across leagues.
+        await asyncio.sleep(config.MIN_REQUEST_DELAY_SECONDS)
+
+    for team_slug, team_id in config.TRACKED_TEAMS:
+        await scrape_team_one(team_slug, team_id)
         await asyncio.sleep(config.MIN_REQUEST_DELAY_SECONDS)
 
 
@@ -83,6 +102,7 @@ def build_scheduler(interval_minutes: int = config.SCRAPE_INTERVAL_MINUTES) -> A
 async def main() -> None:
     logging.basicConfig(level=logging.INFO)
     storage.init_db()
+    fixtures_storage.init_fixtures_db()
 
     scheduler = build_scheduler()
     scheduler.start()
