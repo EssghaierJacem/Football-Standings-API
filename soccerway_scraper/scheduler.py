@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import sys
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
@@ -18,10 +19,24 @@ from .scraper import ScrapeError, scrape_standings
 logger = logging.getLogger(__name__)
 
 
+def _run_in_own_loop(coro_factory):
+    """Run a coroutine on a fresh event loop in this (worker) thread.
+
+    Playwright needs subprocess support, which Windows' SelectorEventLoop (what
+    ``uvicorn --reload`` uses) lacks -> NotImplementedError. A dedicated Proactor
+    loop on a worker thread works regardless of how the host server was started.
+    """
+    loop = asyncio.ProactorEventLoop() if sys.platform == "win32" else asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(coro_factory())
+    finally:
+        loop.close()
+
+
 async def scrape_one(country: str, league: str) -> bool:
     """Scrape and store a single league. Returns True on success."""
     try:
-        result = await scrape_standings(country, league)
+        result = await asyncio.to_thread(_run_in_own_loop, lambda: scrape_standings(country, league))
         storage.upsert_standings(result)
         logger.info(
             "Scraped %s/%s: %d teams (season %s)",

@@ -2,22 +2,36 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel
 
 from . import storage
-from .scheduler import scrape_one
+from . import config
+from .scheduler import build_scheduler, run_all_tracked, scrape_one
 
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Soccerway Standings API")
+_scheduler = None
 
 
 @app.on_event("startup")
-def _on_startup() -> None:
+async def _on_startup() -> None:
     storage.init_db()
+    if config.AUTO_SCRAPE:
+        global _scheduler
+        _scheduler = build_scheduler()
+        _scheduler.start()
+        asyncio.create_task(run_all_tracked())
+
+
+@app.on_event("shutdown")
+def _on_shutdown() -> None:
+    if _scheduler is not None:
+        _scheduler.shutdown(wait=False)
 
 
 class AddLeagueRequest(BaseModel):
@@ -55,6 +69,14 @@ def get_team(country: str, league: str, team_name: str, season: str | None = Non
             detail=f"No stored data for team '{team_name}' in {country}/{league}",
         )
     return team
+
+
+@app.post("/refresh")
+async def refresh(country: str = Query(...), league: str = Query(...)) -> dict:
+    """Scrape one league right now and return the fresh standings."""
+    if not await scrape_one(country, league):
+        raise HTTPException(status_code=502, detail=f"Scrape failed for {country}/{league}")
+    return storage.get_standings(country, league) or {}
 
 
 @app.post("/leagues")
