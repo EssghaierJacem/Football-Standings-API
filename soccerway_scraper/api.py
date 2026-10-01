@@ -8,9 +8,8 @@ import logging
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel
 
-from . import storage
-from . import config
-from .scheduler import build_scheduler, run_all_tracked, scrape_one
+from . import config, fixtures_storage, storage
+from .scheduler import build_scheduler, run_all_tracked, scrape_one, scrape_team_one
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +20,7 @@ _scheduler = None
 @app.on_event("startup")
 async def _on_startup() -> None:
     storage.init_db()
+    fixtures_storage.init_fixtures_db()
     if config.AUTO_SCRAPE:
         global _scheduler
         _scheduler = build_scheduler()
@@ -77,6 +77,32 @@ async def refresh(country: str = Query(...), league: str = Query(...)) -> dict:
     if not await scrape_one(country, league):
         raise HTTPException(status_code=502, detail=f"Scrape failed for {country}/{league}")
     return storage.get_standings(country, league) or {}
+
+
+@app.get("/teams/{team_id}/fixtures")
+def get_team_fixtures(team_id: str) -> list[dict]:
+    """All stored fixtures of a team, soonest first."""
+    return fixtures_storage.list_fixtures(team_id)
+
+
+@app.get("/teams/{team_id}/next-match")
+def get_team_next_match(team_id: str) -> dict:
+    """The team's next match (teams, logos, kickoff, round), or 404 when none is scheduled."""
+    match = fixtures_storage.get_next_match(team_id)
+    if match is None:
+        raise HTTPException(status_code=404, detail=f"No upcoming match stored for team {team_id}")
+    return match
+
+
+@app.post("/teams/{team_id}/refresh")
+async def refresh_team(team_id: str) -> dict:
+    """Scrape the team's fixtures right now. The team must be listed in config.TRACKED_TEAMS."""
+    slug = next((s for s, tid in config.TRACKED_TEAMS if tid == team_id), None)
+    if slug is None:
+        raise HTTPException(status_code=404, detail=f"Team {team_id} is not tracked")
+    if not await scrape_team_one(slug, team_id):
+        raise HTTPException(status_code=502, detail=f"Fixtures scrape failed for team {team_id}")
+    return {"team_id": team_id, "fixtures": fixtures_storage.list_fixtures(team_id)}
 
 
 @app.post("/leagues")

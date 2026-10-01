@@ -24,6 +24,12 @@ TRACKED_LEAGUES: list[tuple[str, str]] = [
     ("england", "championship"),    # promotion + playoff + relegation zones (3 distinct colors)
 ]
 
+# Teams whose upcoming fixtures are scraped: (soccerway slug, soccerway team id).
+# The id is the last part of the team URL, e.g. /team/gafsa/pz9NlZbR/
+TRACKED_TEAMS: list[tuple[str, str]] = [
+    ("gafsa", "pz9NlZbR"),  # EGS Gafsa
+]
+
 # Respectful polling: Soccerway is a free public site with no scraping API,
 # so we deliberately poll slowly rather than as fast as possible. Standings
 # only change when a match finishes, so anything faster than ~30 min buys
